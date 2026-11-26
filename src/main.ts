@@ -1,21 +1,24 @@
 import './estilo.css';
-import { TAXA, pontoDeCorte, ehQuaseSilencio, limparTexto, reduzirTaxa, rms } from './trechos';
+import { TAXA, pontoDeCorte, ehQuaseSilencio, limparTexto, reduzirTaxa, rms, paraWav } from './trechos';
 
-const VERSAO = '0.1.1';
+const VERSAO = '0.2.0';
 const MODELOS = {
   rapido: { id: 'onnx-community/whisper-base', nome: 'Rápido', tamanho: 'cerca de 80 MB' },
   preciso: { id: 'onnx-community/whisper-small', nome: 'Mais preciso', tamanho: 'cerca de 250 MB' },
+  nuvem: { id: '@cf/openai/whisper-large-v3-turbo', nome: 'Nuvem', tamanho: '' },
 } as const;
 type ChaveModelo = keyof typeof MODELOS;
 
 const SIMULAR = new URLSearchParams(location.search).has('simular');
+const ENDERECO_PROTEGIDO = 'vocal.pixelnexo.com.br';
+const NUVEM_DISPONIVEL = location.hostname === ENDERECO_PROTEGIDO || SIMULAR;
 
 interface Trecho { id: number; inicio: number; texto: string; pendente: boolean; }
 
 const estado = {
   tela: 'inicio' as 'inicio' | 'carregando' | 'gravando' | 'encerrada',
   consentimento: false,
-  modelo: 'rapido' as ChaveModelo,
+  modelo: (NUVEM_DISPONIVEL ? 'nuvem' : 'rapido') as ChaveModelo,
   pausado: false,
   segundos: 0,
   trechos: [] as Trecho[],
@@ -101,7 +104,8 @@ function tentarCortar(forcar: boolean) {
   const id = proximoId++;
   estado.trechos.push({ id, inicio, texto: 'Transcrevendo…', pendente: true });
   desenharTranscricao();
-  worker!.postMessage({ tipo: 'transcrever', id, audio: trecho, segundos: trecho.length / TAXA }, [trecho.buffer]);
+  if (estado.modelo === 'nuvem') transcreverNaNuvem(id, trecho);
+  else worker!.postMessage({ tipo: 'transcrever', id, audio: trecho, segundos: trecho.length / TAXA }, [trecho.buffer]);
 }
 
 /**
@@ -155,21 +159,49 @@ function garantirWorker() {
       estado.tela = 'inicio';
       desenhar();
     } else if (m.tipo === 'texto') {
-      const t = estado.trechos.find(x => x.id === m.id);
-      if (t) {
-        const limpo = limparTexto(m.texto || '');
-        t.texto = m.erro ? '(falha ao transcrever este trecho)' : limpo;
-        t.pendente = false;
-        if (!t.texto) estado.trechos = estado.trechos.filter(x => x.id !== m.id);
-        desenharTranscricao();
-      }
+      aplicarTexto(m.id, m.erro ? '(falha ao transcrever este trecho)' : limparTexto(m.texto || ''));
     }
   };
   return worker;
 }
 
+function aplicarTexto(id: number, texto: string) {
+  const t = estado.trechos.find(x => x.id === id);
+  if (!t) return;
+  t.texto = texto;
+  t.pendente = false;
+  if (!t.texto) estado.trechos = estado.trechos.filter(x => x.id !== id);
+  desenharTranscricao();
+}
+
+/** Modo nuvem: manda o trecho para a transcrição na conta da Cloudflare e recebe o texto. */
+async function transcreverNaNuvem(id: number, trecho: Float32Array) {
+  if (SIMULAR) {
+    await new Promise(r => setTimeout(r, 400));
+    aplicarTexto(id, `[nuvem simulada: ${(trecho.length / TAXA).toFixed(1)} s]`);
+    return;
+  }
+  try {
+    const r = await fetch(`${import.meta.env.BASE_URL}api/transcrever`, {
+      method: 'POST', body: paraWav(trecho), headers: { 'Content-Type': 'audio/wav' },
+      credentials: 'same-origin', redirect: 'manual',
+    });
+    if (r.type === 'opaqueredirect' || r.status === 401 || r.status === 403) {
+      aplicarTexto(id, '(o acesso expirou: recarregue a página e entre de novo com o código do e-mail)');
+      return;
+    }
+    if (r.status === 429) { aplicarTexto(id, '(a cota grátis de hoje acabou: use o modo Rápido até amanhã)'); return; }
+    if (!r.ok) { aplicarTexto(id, '(falha ao transcrever este trecho)'); return; }
+    const j = await r.json();
+    aplicarTexto(id, limparTexto(j.texto || ''));
+  } catch {
+    aplicarTexto(id, '(sem internet: este trecho não foi transcrito)');
+  }
+}
+
 async function iniciarSessao() {
   estado.erro = '';
+  if (estado.modelo === 'nuvem') { comecarGravacao(); return; }
   if (modeloCarregado === estado.modelo) { comecarGravacao(); return; }
   estado.tela = 'carregando';
   estado.progresso = {};
@@ -259,6 +291,14 @@ function telaInicio() {
   const op = (k: ChaveModelo) => `
     <label class="opcao"><input type="radio" name="modelo" value="${k}" ${estado.modelo === k ? 'checked' : ''}>
       <span><b>${MODELOS[k].nome}</b>${k === 'rapido' ? ' (recomendado)' : ''}<small>Baixa ${MODELOS[k].tamanho}, só na primeira vez.</small></span></label>`;
+  const nuvem = NUVEM_DISPONIVEL
+    ? `<label class="opcao"><input type="radio" name="modelo" value="nuvem" ${estado.modelo === 'nuvem' ? 'checked' : ''}>
+        <span><b>Nuvem</b> (o mais preciso)<small>Não baixa nada. <b>O áudio de cada trecho é enviado</b> para transcrição na conta da Cloudflare do projeto e não fica guardado lá.</small></span></label>`
+    : `<label class="opcao" style="opacity:.6;cursor:default"><input type="radio" disabled>
+        <span><b>Nuvem</b> (o mais preciso)<small>Disponível só no endereço protegido: <a href="https://${ENDERECO_PROTEGIDO}/">${ENDERECO_PROTEGIDO}</a></small></span></label>`;
+  const passo3 = estado.modelo === 'nuvem'
+    ? 'No modo Nuvem, o áudio de cada trecho é enviado para transcrição e devolvido como texto. Nada fica guardado.'
+    : 'O áudio é processado <b>só neste aparelho</b>. Nada da sessão vai para a internet.';
   return `${cabecalho()}
     <div class="aviso"><b>Fase de teste.</b> Use só com dados fictícios. O programa não faz diagnóstico: ele transcreve a fala para apoiar a psicóloga.</div>
     ${estado.erro ? `<div class="aviso" style="color:var(--vermelho)">${estado.erro}</div>` : ''}
@@ -267,13 +307,13 @@ function telaInicio() {
       <ol class="passos suave">
         <li>Você confirma que o paciente concordou.</li>
         <li>O programa ouve pelo microfone e escreve o que é dito.</li>
-        <li>O áudio é processado <b>só neste aparelho</b>. Nada da sessão vai para a internet.</li>
+        <li id="passo3">${passo3}</li>
         <li>Ao encerrar, você copia ou baixa o texto. Nada fica salvo.</li>
       </ol>
     </div>
     <div class="cartao">
       <h2>Modelo de voz</h2>
-      ${op('rapido')}${op('preciso')}
+      ${nuvem}${op('rapido')}${op('preciso')}
     </div>
     <div class="cartao">
       <h2>Consentimento</h2>
@@ -362,7 +402,7 @@ function desenhar() {
     const c = document.getElementById('consent') as HTMLInputElement;
     const b = document.getElementById('iniciar') as HTMLButtonElement;
     c.onchange = () => { estado.consentimento = c.checked; b.disabled = !c.checked; };
-    app.querySelectorAll<HTMLInputElement>('input[name=modelo]').forEach(r => r.onchange = () => { estado.modelo = r.value as ChaveModelo; });
+    app.querySelectorAll<HTMLInputElement>('input[name=modelo]').forEach(r => r.onchange = () => { estado.modelo = r.value as ChaveModelo; desenhar(); });
     b.onclick = () => { if (estado.consentimento) { ligarAudioNoToque(); iniciarSessao(); } };
   }
   if (estado.tela === 'carregando') desenharProgresso();
