@@ -1,0 +1,6 @@
+{
+  "name": "Vocalpsianalise",
+  "description": "Aplicativo web de apoio a psicólogas para análise vocal, prosódica e emocional de sessões gravadas.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

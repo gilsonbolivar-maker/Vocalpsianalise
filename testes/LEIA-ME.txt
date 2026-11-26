@@ -1,3 +1,0 @@
-Voz sintética (espeak-ng) dizendo:
-"Eu tenho dormido muito mal nas últimas semanas. Perdi o interesse pelas coisas que eu gostava de fazer."
-Usada só para testar a transcrição. Não contém dados de nenhuma pessoa.
