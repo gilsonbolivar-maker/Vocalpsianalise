@@ -1,7 +1,7 @@
 import './estilo.css';
 import { TAXA, pontoDeCorte, ehQuaseSilencio, limparTexto, reduzirTaxa, rms, paraWav } from './trechos';
 
-const VERSAO = '0.2.0';
+const VERSAO = '0.2.1';
 const MODELOS = {
   rapido: { id: 'onnx-community/whisper-base', nome: 'Rápido', tamanho: 'cerca de 80 MB' },
   preciso: { id: 'onnx-community/whisper-small', nome: 'Mais preciso', tamanho: 'cerca de 250 MB' },
@@ -46,6 +46,8 @@ let travaTela: any = null;
 let nivelAtual = 0;
 let desdeUltimaChecagem = 0;
 let ultimoAudio = 0;
+let erroAudio = '';
+const NOMES_ESTADO: Record<string, string> = { running: 'ligado', suspended: 'parado', interrupted: 'interrompido pelo iPad', closed: 'fechado' };
 let picoRecente = 0;
 
 /** Mostra na tela se o som do microfone está chegando, e oferece um botão para destravar. */
@@ -53,10 +55,12 @@ function atualizarDiagnostico() {
   const el = document.getElementById('diagnostico');
   if (!el || estado.tela !== 'gravando') return;
   const chegando = performance.now() - ultimoAudio < 1500 && ctx?.state === 'running';
+  const estadoTxt = `Estado do áudio: ${NOMES_ESTADO[ctx?.state || 'closed'] || ctx?.state}${no ? '' : ' · gravador não montado'}${erroAudio ? ' · erro: ' + escapar(erroAudio) : ''}`;
   if (!chegando) {
     el.innerHTML = `<div class="aviso" style="margin:12px 0 0">O som do microfone <b>não está chegando</b>.
-      <button class="principal" id="destravar" style="margin-top:10px">Tocar aqui para ativar o microfone</button></div>`;
-    document.getElementById('destravar')!.onclick = () => { ctx?.resume(); };
+      <button class="principal" id="destravar" style="margin-top:10px">Tocar aqui para ativar o microfone</button>
+      <small style="display:block;margin-top:8px">${estadoTxt}</small></div>`;
+    document.getElementById('destravar')!.onclick = reconstruirAudio;
   } else if (picoRecente < 0.02) {
     el.innerHTML = `<p class="suave" style="margin:12px 0 0">Microfone ligado, mas o som está <b>muito baixo</b>. Aproxime o aparelho de quem fala.</p>`;
   } else {
@@ -117,19 +121,50 @@ function ligarAudioNoToque() {
   ctx.resume().catch(() => { /* tenta de novo depois */ });
 }
 
-async function iniciarMicrofone() {
-  fluxo = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-  });
-  if (!ctx || ctx.state === 'closed') ctx = new AudioContext();
-  try { await ctx.resume(); } catch { /* ignora */ }
+/** Liga o som do microfone ao gravador dentro do contexto de áudio atual. */
+async function montarGrafo() {
+  if (!ctx || !fluxo) return;
   taxaOrigem = ctx.sampleRate;
   await ctx.audioWorklet.addModule(`${import.meta.env.BASE_URL}gravador-worklet.js`);
   const fonte = ctx.createMediaStreamSource(fluxo);
   no = new AudioWorkletNode(ctx, 'gravador');
   no.port.onmessage = (e) => receberAudio(e.data as Float32Array);
   fonte.connect(no);
-  try { travaTela = await (navigator as any).wakeLock?.request('screen'); } catch { /* sem trava de tela */ }
+}
+
+function novoContexto() {
+  const c = new AudioContext();
+  c.onstatechange = () => atualizarDiagnostico();
+  // Não espera: no iPad, este comando às vezes nunca termina.
+  c.resume().catch(() => {});
+  return c;
+}
+
+/** Pede o microfone. Só esta parte espera, porque é quando o iPad pergunta a permissão. */
+async function pedirMicrofone() {
+  fluxo = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+}
+
+/** Liga o áudio sem travar a tela: se algo demorar, o aviso na tela mostra. */
+function ligarAudio() {
+  if (!ctx || ctx.state === 'closed') ctx = novoContexto();
+  else { ctx.onstatechange = () => atualizarDiagnostico(); ctx.resume().catch(() => {}); }
+  montarGrafo().catch((e) => { erroAudio = String(e?.message || e); atualizarDiagnostico(); });
+  (navigator as any).wakeLock?.request('screen').then((t: any) => { travaTela = t; }).catch(() => {});
+}
+
+/** Chamado no toque do botão de destravar: recria o áudio do zero, dentro do toque. */
+function reconstruirAudio() {
+  try { no?.disconnect(); } catch { /* ignora */ }
+  no = null;
+  const velho = ctx;
+  ctx = novoContexto();
+  velho?.close().catch(() => {});
+  erroAudio = '';
+  montarGrafo().catch((e) => { erroAudio = String(e?.message || e); atualizarDiagnostico(); });
+  setTimeout(atualizarDiagnostico, 800);
 }
 
 function pararMicrofone() {
@@ -212,7 +247,7 @@ async function iniciarSessao() {
 
 async function comecarGravacao() {
   try {
-    await iniciarMicrofone();
+    await pedirMicrofone();
   } catch (err) {
     estado.erro = 'O microfone não foi liberado. Permita o uso do microfone para este site e tente de novo.';
     estado.tela = 'inicio';
@@ -225,6 +260,8 @@ async function comecarGravacao() {
   estado.trechos = [];
   pedacos = []; amostrasNoBuffer = 0; amostrasTotais = 0; inicioDoBuffer = 0;
   ultimoAudio = performance.now(); picoRecente = 0.05;
+  desenhar();
+  ligarAudio();
   relogio = window.setInterval(() => {
     if (!estado.pausado) { estado.segundos++; const r = document.getElementById('relogio'); if (r) r.textContent = formatar(estado.segundos); }
     atualizarDiagnostico();
