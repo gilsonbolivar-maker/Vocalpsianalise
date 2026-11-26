@@ -1,0 +1,27 @@
+{
+  "name": "vocalpsianalise",
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "checar": "tsc"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gilsonbolivar-maker/vocalpsianalise.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gilsonbolivar-maker/vocalpsianalise/issues"
+  },
+  "homepage": "https://github.com/gilsonbolivar-maker/vocalpsianalise#readme",
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.2"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  },
+  "private": true,
+  "type": "module"
+}
