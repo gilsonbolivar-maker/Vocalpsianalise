@@ -1,7 +1,7 @@
 import './estilo.css';
-import { TAXA, pontoDeCorte, ehQuaseSilencio, limparTexto, reduzirTaxa, rms, paraWav } from './trechos';
+import { TAXA, pontoDeCorte, ehQuaseSilencio, limparTexto, reduzirTaxa, rms, paraWav, dividir } from './trechos';
 
-const VERSAO = '0.2.1';
+const VERSAO = '0.3.0';
 const MODELOS = {
   rapido: { id: 'onnx-community/whisper-base', nome: 'Rápido', tamanho: 'cerca de 80 MB' },
   preciso: { id: 'onnx-community/whisper-small', nome: 'Mais preciso', tamanho: 'cerca de 250 MB' },
@@ -16,7 +16,8 @@ const NUVEM_DISPONIVEL = location.hostname === ENDERECO_PROTEGIDO || SIMULAR;
 interface Trecho { id: number; inicio: number; texto: string; pendente: boolean; }
 
 const estado = {
-  tela: 'inicio' as 'inicio' | 'carregando' | 'gravando' | 'encerrada',
+  tela: 'inicio' as 'inicio' | 'carregando' | 'gravando' | 'processando' | 'encerrada',
+  origem: 'arquivo' as 'arquivo' | 'aovivo',
   consentimento: false,
   modelo: (NUVEM_DISPONIVEL ? 'nuvem' : 'rapido') as ChaveModelo,
   pausado: false,
@@ -30,6 +31,8 @@ const estado = {
 const app = document.getElementById('app')!;
 let worker: Worker | null = null;
 let modeloCarregado: ChaveModelo | null = null;
+let aoFicarPronto: () => void = () => {};
+let arq = { nome: '', total: 0, prontos: 0, fase: '' };
 
 // ---------- áudio ----------
 let ctx: AudioContext | null = null;
@@ -188,7 +191,7 @@ function garantirWorker() {
     } else if (m.tipo === 'pronto') {
       estado.dispositivo = m.dispositivo;
       modeloCarregado = estado.modelo;
-      comecarGravacao();
+      aoFicarPronto();
     } else if (m.tipo === 'erro') {
       estado.erro = 'Não foi possível baixar o modelo de voz. Confira a internet e tente de novo. Detalhe: ' + m.mensagem;
       estado.tela = 'inicio';
@@ -207,6 +210,84 @@ function aplicarTexto(id: number, texto: string) {
   t.pendente = false;
   if (!t.texto) estado.trechos = estado.trechos.filter(x => x.id !== id);
   desenharTranscricao();
+  if (estado.tela === 'processando') {
+    arq.prontos++;
+    desenharProcesso();
+    if (!estado.trechos.some(x => x.pendente)) { estado.tela = 'encerrada'; desenhar(); }
+  }
+}
+
+// ---------- gravação escolhida do aparelho ----------
+async function decodificar(f: File): Promise<Float32Array> {
+  const bytes = await f.arrayBuffer();
+  const Off = (window as any).OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+  const off = new Off(1, TAXA, TAXA);
+  const buf: AudioBuffer = await new Promise((res, rej) => {
+    const p = off.decodeAudioData(bytes, res, rej);
+    if (p && typeof p.then === 'function') p.then(res, rej);
+  });
+  const n = buf.length;
+  const mono = new Float32Array(n);
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < n; i++) mono[i] += d[i] / buf.numberOfChannels;
+  }
+  return reduzirTaxa(mono, buf.sampleRate);
+}
+
+async function transcreverArquivo(f: File) {
+  estado.origem = 'arquivo';
+  estado.tela = 'processando';
+  estado.trechos = [];
+  arq = { nome: f.name, total: 0, prontos: 0, fase: 'Abrindo a gravação…' };
+  desenhar();
+  let mono: Float32Array;
+  try {
+    mono = await decodificar(f);
+  } catch {
+    estado.erro = 'Não consegui abrir esta gravação. Use o arquivo do Gravador (m4a), ou um mp3 ou wav.';
+    estado.tela = 'inicio';
+    desenhar();
+    return;
+  }
+  estado.segundos = Math.round(mono.length / TAXA);
+  const partes = dividir(mono).filter(([a, b]) => !ehQuaseSilencio(mono.subarray(a, b)));
+  arq.total = partes.length;
+  arq.fase = 'Transcrevendo';
+  if (!partes.length) { estado.tela = 'encerrada'; desenhar(); return; }
+  const fila = partes.map(([a, b]) => {
+    const t: Trecho = { id: proximoId++, inicio: a / TAXA, texto: 'Aguardando…', pendente: true };
+    estado.trechos.push(t);
+    return { t, audio: mono.slice(a, b) };
+  });
+  desenharProcesso();
+  desenharTranscricao();
+  if (estado.modelo === 'nuvem') {
+    let i = 0;
+    const trabalhar = async () => { while (i < fila.length) { const it = fila[i++]; it.t.texto = 'Transcrevendo…'; desenharTranscricao(); await transcreverNaNuvem(it.t.id, it.audio); } };
+    await Promise.all([trabalhar(), trabalhar(), trabalhar()]);
+  } else {
+    for (const it of fila) worker!.postMessage({ tipo: 'transcrever', id: it.t.id, audio: it.audio, segundos: it.audio.length / TAXA }, [it.audio.buffer]);
+  }
+}
+
+function prepararModelo(depois: () => void) {
+  estado.erro = '';
+  if (estado.modelo === 'nuvem' || modeloCarregado === estado.modelo) { depois(); return; }
+  aoFicarPronto = depois;
+  estado.tela = 'carregando';
+  estado.progresso = {};
+  desenhar();
+  if (worker && modeloCarregado !== estado.modelo) { worker.terminate(); worker = null; }
+  garantirWorker().postMessage({ tipo: 'carregar', modelo: MODELOS[estado.modelo].id, simular: SIMULAR });
+}
+
+function desenharProcesso() {
+  const b = document.getElementById('barra-arq');
+  const t = document.getElementById('texto-arq');
+  const pct = arq.total ? Math.round((arq.prontos / arq.total) * 100) : 0;
+  if (b) b.style.width = `${pct}%`;
+  if (t) t.textContent = arq.total ? `${arq.fase}: ${arq.prontos} de ${arq.total} trechos (${pct}%)` : arq.fase;
 }
 
 /** Modo nuvem: manda o trecho para a transcrição na conta da Cloudflare e recebe o texto. */
@@ -234,15 +315,9 @@ async function transcreverNaNuvem(id: number, trecho: Float32Array) {
   }
 }
 
-async function iniciarSessao() {
-  estado.erro = '';
-  if (estado.modelo === 'nuvem') { comecarGravacao(); return; }
-  if (modeloCarregado === estado.modelo) { comecarGravacao(); return; }
-  estado.tela = 'carregando';
-  estado.progresso = {};
-  desenhar();
-  if (worker && modeloCarregado !== estado.modelo) { worker.terminate(); worker = null; }
-  garantirWorker().postMessage({ tipo: 'carregar', modelo: MODELOS[estado.modelo].id, simular: SIMULAR });
+function iniciarSessao() {
+  estado.origem = 'aovivo';
+  prepararModelo(() => comecarGravacao());
 }
 
 async function comecarGravacao() {
@@ -333,32 +408,50 @@ function telaInicio() {
         <span><b>Nuvem</b> (o mais preciso)<small>Não baixa nada. <b>O áudio de cada trecho é enviado</b> para transcrição na conta da Cloudflare do projeto e não fica guardado lá.</small></span></label>`
     : `<label class="opcao" style="opacity:.6;cursor:default"><input type="radio" disabled>
         <span><b>Nuvem</b> (o mais preciso)<small>Disponível só no endereço protegido: <a href="https://${ENDERECO_PROTEGIDO}/">${ENDERECO_PROTEGIDO}</a></small></span></label>`;
-  const passo3 = estado.modelo === 'nuvem'
-    ? 'No modo Nuvem, o áudio de cada trecho é enviado para transcrição e devolvido como texto. Nada fica guardado.'
-    : 'O áudio é processado <b>só neste aparelho</b>. Nada da sessão vai para a internet.';
+  const ok = estado.consentimento ? '' : 'disabled';
   return `${cabecalho()}
     <div class="aviso"><b>Fase de teste.</b> Use só com dados fictícios. O programa não faz diagnóstico: ele transcreve a fala para apoiar a psicóloga.</div>
     ${estado.erro ? `<div class="aviso" style="color:var(--vermelho)">${estado.erro}</div>` : ''}
     <div class="cartao">
-      <h2>Como funciona</h2>
+      <h2>1. Grave a sessão no aparelho</h2>
       <ol class="passos suave">
-        <li>Você confirma que o paciente concordou.</li>
-        <li>O programa ouve pelo microfone e escreve o que é dito.</li>
-        <li id="passo3">${passo3}</li>
-        <li>Ao encerrar, você copia ou baixa o texto. Nada fica salvo.</li>
+        <li>Abra o app <b>Gravador</b> do iPad ou do celular e grave a sessão.</li>
+        <li>Ao terminar, toque na gravação, depois em <b>Compartilhar</b> e em <b>Salvar em Arquivos</b>.</li>
       </ol>
+    </div>
+    <div class="cartao">
+      <h2>2. Consentimento</h2>
+      <label class="opcao"><input type="checkbox" id="consent" ${estado.consentimento ? 'checked' : ''}>
+        <span>O paciente foi informado e <b>concordou</b> com a gravação e a transcrição desta sessão.</span></label>
+    </div>
+    <div class="cartao">
+      <h2>3. Escolha a gravação</h2>
+      <p class="suave" style="margin-top:0">Arquivo do Gravador (m4a), mp3 ou wav. O programa divide a fala em trechos e transcreve um por um.</p>
+      <input type="file" id="arquivo" accept="audio/*,.m4a,.mp3,.wav,.aac" hidden>
+      <button class="principal" id="escolher" ${ok}>Escolher gravação</button>
     </div>
     <div class="cartao">
       <h2>Modelo de voz</h2>
       ${nuvem}${op('rapido')}${op('preciso')}
     </div>
     <div class="cartao">
-      <h2>Consentimento</h2>
-      <label class="opcao"><input type="checkbox" id="consent" ${estado.consentimento ? 'checked' : ''}>
-        <span>O paciente foi informado e <b>concordou</b> com a escuta e a transcrição desta sessão.</span></label>
-      <div style="margin-top:16px"><button class="principal" id="iniciar" ${estado.consentimento ? '' : 'disabled'}>Iniciar sessão</button></div>
+      <h2>Gravar ao vivo pelo app</h2>
+      <p class="suave" style="margin-top:0">Experimental. No iPad, a captação pelo navegador pode falhar. Prefira o Gravador.</p>
+      <button class="secundario" id="iniciar" style="width:100%" ${ok}>Gravar ao vivo</button>
     </div>
     <p class="rodape">Documento de apoio. Hipóteses a confirmar pelo profissional responsável.</p>`;
+}
+
+function telaProcessando() {
+  return `${cabecalho()}
+    <div class="cartao">
+      <h2>Transcrevendo a gravação</h2>
+      <p class="suave" style="margin-top:0">${escapar(arq.nome)}${estado.segundos ? ` · ${formatar(estado.segundos)}` : ''}</p>
+      <div class="barra"><div id="barra-arq"></div></div>
+      <p class="suave" id="texto-arq">${arq.fase}</p>
+      <p class="suave">Mantenha esta tela aberta até terminar.</p>
+    </div>
+    <div class="cartao"><h2>Transcrição</h2><div class="transcricao" id="transcricao"></div></div>`;
 }
 
 function telaCarregando() {
@@ -392,7 +485,7 @@ function telaEncerrada() {
   const pendentes = estado.trechos.some(t => t.pendente);
   return `${cabecalho()}
     <div class="cartao">
-      <h2>Sessão encerrada</h2>
+      <h2>${estado.origem === 'arquivo' ? 'Transcrição da gravação' : 'Sessão encerrada'}</h2>
       <p class="suave">Duração: ${formatar(estado.segundos)}. ${pendentes ? 'Ainda terminando os últimos trechos…' : 'Transcrição completa.'}</p>
       <div class="linha-botoes">
         <button class="principal" id="copiar">Copiar texto</button>
@@ -433,16 +526,25 @@ function desenhar() {
   app.innerHTML =
     estado.tela === 'inicio' ? telaInicio() :
     estado.tela === 'carregando' ? telaCarregando() :
-    estado.tela === 'gravando' ? telaGravando() : telaEncerrada();
+    estado.tela === 'gravando' ? telaGravando() :
+    estado.tela === 'processando' ? telaProcessando() : telaEncerrada();
 
   if (estado.tela === 'inicio') {
     const c = document.getElementById('consent') as HTMLInputElement;
     const b = document.getElementById('iniciar') as HTMLButtonElement;
-    c.onchange = () => { estado.consentimento = c.checked; b.disabled = !c.checked; };
+    const esc = document.getElementById('escolher') as HTMLButtonElement;
+    const arquivo = document.getElementById('arquivo') as HTMLInputElement;
+    c.onchange = () => { estado.consentimento = c.checked; b.disabled = !c.checked; esc.disabled = !c.checked; };
+    esc.onclick = () => { if (estado.consentimento) arquivo.click(); };
+    arquivo.onchange = () => {
+      const f = arquivo.files?.[0];
+      if (f) prepararModelo(() => transcreverArquivo(f));
+    };
     app.querySelectorAll<HTMLInputElement>('input[name=modelo]').forEach(r => r.onchange = () => { estado.modelo = r.value as ChaveModelo; desenhar(); });
     b.onclick = () => { if (estado.consentimento) { ligarAudioNoToque(); iniciarSessao(); } };
   }
   if (estado.tela === 'carregando') desenharProgresso();
+  if (estado.tela === 'processando') { desenharProcesso(); desenharTranscricao(); }
   if (estado.tela === 'gravando') {
     document.getElementById('pausar')!.onclick = alternarPausa;
     document.getElementById('encerrar')!.onclick = () => { if (confirm('Encerrar a sessão?')) encerrar(); };
@@ -457,7 +559,7 @@ function desenhar() {
 }
 
 window.addEventListener('beforeunload', (e) => {
-  if (estado.tela === 'gravando' || (estado.tela === 'encerrada' && estado.trechos.length)) { e.preventDefault(); e.returnValue = ''; }
+  if (estado.tela === 'gravando' || estado.tela === 'processando' || (estado.tela === 'encerrada' && estado.trechos.length)) { e.preventDefault(); e.returnValue = ''; }
 });
 
 desenhar();

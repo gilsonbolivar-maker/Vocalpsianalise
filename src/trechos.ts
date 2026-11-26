@@ -90,3 +90,19 @@ export function paraWav(a: Float32Array, taxa = TAXA): Blob {
   }
   return new Blob([buf], { type: 'audio/wav' });
 }
+
+/** Divide uma gravação inteira em trechos de até 25 s, cortando nas pausas. */
+export function dividir(a: Float32Array): [number, number][] {
+  const out: [number, number][] = [];
+  const MAX = 25 * TAXA;
+  let pos = 0;
+  while (pos < a.length) {
+    const fim = Math.min(a.length, pos + MAX);
+    const fatia = a.subarray(pos, fim);
+    let c = fim === a.length ? fatia.length : (pontoDeCorte(fatia, false) ?? fatia.length);
+    if (c < TAXA) c = fatia.length;
+    out.push([pos, pos + c]);
+    pos += c;
+  }
+  return out;
+}
