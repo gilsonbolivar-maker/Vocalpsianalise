@@ -1,7 +1,7 @@
 import './estilo.css';
 import { TAXA, pontoDeCorte, ehQuaseSilencio, limparTexto, reduzirTaxa, rms } from './trechos';
 
-const VERSAO = '0.1.0';
+const VERSAO = '0.1.1';
 const MODELOS = {
   rapido: { id: 'onnx-community/whisper-base', nome: 'Rápido', tamanho: 'cerca de 80 MB' },
   preciso: { id: 'onnx-community/whisper-small', nome: 'Mais preciso', tamanho: 'cerca de 250 MB' },
@@ -42,6 +42,25 @@ let relogio: number | undefined;
 let travaTela: any = null;
 let nivelAtual = 0;
 let desdeUltimaChecagem = 0;
+let ultimoAudio = 0;
+let picoRecente = 0;
+
+/** Mostra na tela se o som do microfone está chegando, e oferece um botão para destravar. */
+function atualizarDiagnostico() {
+  const el = document.getElementById('diagnostico');
+  if (!el || estado.tela !== 'gravando') return;
+  const chegando = performance.now() - ultimoAudio < 1500 && ctx?.state === 'running';
+  if (!chegando) {
+    el.innerHTML = `<div class="aviso" style="margin:12px 0 0">O som do microfone <b>não está chegando</b>.
+      <button class="principal" id="destravar" style="margin-top:10px">Tocar aqui para ativar o microfone</button></div>`;
+    document.getElementById('destravar')!.onclick = () => { ctx?.resume(); };
+  } else if (picoRecente < 0.02) {
+    el.innerHTML = `<p class="suave" style="margin:12px 0 0">Microfone ligado, mas o som está <b>muito baixo</b>. Aproxime o aparelho de quem fala.</p>`;
+  } else {
+    el.innerHTML = `<p class="suave" style="margin:12px 0 0;color:var(--verde)"><b>Microfone captando bem.</b></p>`;
+  }
+  picoRecente *= 0.6;
+}
 
 function juntar(): Float32Array {
   const out = new Float32Array(amostrasNoBuffer);
@@ -51,12 +70,15 @@ function juntar(): Float32Array {
 }
 
 function receberAudio(bruto: Float32Array) {
+  ultimoAudio = performance.now();
   if (estado.pausado) return;
   const a = reduzirTaxa(bruto, taxaOrigem);
   pedacos.push(a);
   amostrasNoBuffer += a.length;
   amostrasTotais += a.length;
-  nivelAtual = Math.min(1, rms(a) * 8);
+  const vol = rms(a);
+  if (vol > picoRecente) picoRecente = vol;
+  nivelAtual = Math.min(1, vol * 8);
   const barra = document.getElementById('nivel');
   if (barra) barra.style.width = `${Math.round(nivelAtual * 100)}%`;
   // Confere o ponto de corte só a cada meio segundo, para não pesar no aparelho.
@@ -82,12 +104,21 @@ function tentarCortar(forcar: boolean) {
   worker!.postMessage({ tipo: 'transcrever', id, audio: trecho, segundos: trecho.length / TAXA }, [trecho.buffer]);
 }
 
+/**
+ * O Safari do iPad só libera o som se o áudio for ligado no momento do toque.
+ * Por isso esta função é chamada direto no clique do botão, antes de qualquer espera.
+ */
+function ligarAudioNoToque() {
+  if (!ctx || ctx.state === 'closed') ctx = new AudioContext();
+  ctx.resume().catch(() => { /* tenta de novo depois */ });
+}
+
 async function iniciarMicrofone() {
   fluxo = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
-  try { ctx = new AudioContext({ sampleRate: TAXA }); }
-  catch { ctx = new AudioContext(); }
+  if (!ctx || ctx.state === 'closed') ctx = new AudioContext();
+  try { await ctx.resume(); } catch { /* ignora */ }
   taxaOrigem = ctx.sampleRate;
   await ctx.audioWorklet.addModule(`${import.meta.env.BASE_URL}gravador-worklet.js`);
   const fonte = ctx.createMediaStreamSource(fluxo);
@@ -100,9 +131,10 @@ async function iniciarMicrofone() {
 function pararMicrofone() {
   try { no?.disconnect(); } catch { /* ignora */ }
   fluxo?.getTracks().forEach(t => t.stop());
-  ctx?.close();
   try { travaTela?.release(); } catch { /* ignora */ }
-  no = null; fluxo = null; ctx = null; travaTela = null;
+  // O contexto de áudio fica aberto (suspenso) para a próxima sessão funcionar no iPad.
+  ctx?.suspend().catch(() => {});
+  no = null; fluxo = null; travaTela = null;
 }
 
 // ---------- modelo ----------
@@ -160,13 +192,16 @@ async function comecarGravacao() {
   estado.segundos = 0;
   estado.trechos = [];
   pedacos = []; amostrasNoBuffer = 0; amostrasTotais = 0; inicioDoBuffer = 0;
+  ultimoAudio = performance.now(); picoRecente = 0.05;
   relogio = window.setInterval(() => {
     if (!estado.pausado) { estado.segundos++; const r = document.getElementById('relogio'); if (r) r.textContent = formatar(estado.segundos); }
+    atualizarDiagnostico();
   }, 1000);
   desenhar();
 }
 
 function alternarPausa() {
+  ctx?.resume().catch(() => {});
   if (!estado.pausado) tentarCortar(true);
   estado.pausado = !estado.pausado;
   if (!estado.pausado) inicioDoBuffer = estado.segundos;
@@ -266,6 +301,7 @@ function telaGravando() {
         <span>${estado.pausado ? 'Pausado' : 'Ouvindo'}</span>
         <span class="relogio" id="relogio">${formatar(estado.segundos)}</span></div>
       <div class="nivel"><div id="nivel"></div></div>
+      <div id="diagnostico"></div>
       <div class="linha-botoes">
         <button class="secundario" id="pausar">${estado.pausado ? 'Retomar' : 'Pausar'}</button>
         <button class="perigo" id="encerrar">Encerrar sessão</button>
@@ -327,7 +363,7 @@ function desenhar() {
     const b = document.getElementById('iniciar') as HTMLButtonElement;
     c.onchange = () => { estado.consentimento = c.checked; b.disabled = !c.checked; };
     app.querySelectorAll<HTMLInputElement>('input[name=modelo]').forEach(r => r.onchange = () => { estado.modelo = r.value as ChaveModelo; });
-    b.onclick = () => { if (estado.consentimento) iniciarSessao(); };
+    b.onclick = () => { if (estado.consentimento) { ligarAudioNoToque(); iniciarSessao(); } };
   }
   if (estado.tela === 'carregando') desenharProgresso();
   if (estado.tela === 'gravando') {
