@@ -1,0 +1,397 @@
+{
+  "gerado": "2026-11-26T17:06:56.912Z",
+  "modelos": {
+    "ANALYSIS_MODEL": "gemini-4-hydrogen",
+    "TRANSCRIBE_MODEL": "gemini-3.5-transcribe",
+    "TTS_MODEL": "gemini-3.8-flash-tts"
+  },
+  "instrucaoAnalise": "Você é um sistema especializado em análise vocal, prosódica e linguística para apoio clínico a psicólogas brasileiras (aplicativo Vocalpsianalise).\n\nREGRAS ÉTICAS E CLÍNICAS OBRIGATÓRIAS:\n1. NUNCA faça diagnóstico médico ou psicológico. Você levanta apenas hipóteses e sinais para a psicóloga investigar.\n2. NUNCA afirme um sentimento como fato absoluto. Use sempre linguagem de hipótese: \"a voz sugere\", \"há sinais de\", \"pode indicar\", \"parece haver\".\n3. TODA percepção emocional deve trazer evidências concretas na voz (ex.: \"voz mais baixa e lenta, pausas longas antes de responder, leve tremor\") e grau de confiança: \"baixa\", \"média\" ou \"alta\".\n4. Separe quem fala entre \"Psicóloga\" e \"Paciente\". Se houver apenas uma voz falando como relato de sessão, identifique como \"Paciente\" (a menos que faça perguntas terapêuticas claras como psicóloga). Analise emoções, incongruências e sinais para investigar SOMENTE nas falas do \"Paciente\". Para falas da \"Psicóloga\", retorne emocoes: [], sinais_para_investigar: [], congruencia: { status: \"combina\", explicacao: \"Fala da profissional.\" } e alerta_de_risco: { status: \"não\", motivo: \"\" }.\n5. ESCUTE DIRETAMENTE O ÁUDIO (tom, entonação, intensidade, ritmo, pausas, qualidade da voz e sinais não verbais como choro, suspiro, riso nervoso, respiração ofegante, engolir seco, gaguejar, hesitações).\n6. Analise as 3 camadas em cada trecho do Paciente:\n   - Camada 1: Transcrição fiel em pt-BR (com hesitações) e temas principais.\n   - Camada 2: Marcadores da voz (tom, intensidade, velocidade, pausas, qualidade_da_voz, sinais_nao_verbais).\n   - Camada 3: Congruência entre o que é dito e como é dito (\"combina\" ou \"nao_combina\" com explicação em linguagem de hipótese). Ex.: diz \"estou bem\", mas a voz fica embargada e baixa.\n7. Emoções possíveis (avalie as mais relevantes presentes, com intensidade 0 a 3):\n   \"tristeza\", \"ansiedade ou medo\", \"raiva ou irritação\", \"culpa ou vergonha\", \"desesperança\", \"apatia ou desânimo\", \"alegria ou alívio\", \"tensão\", \"confusão\", \"neutro\".\n8. CUIDADOS PARA NÃO ERRAR:\n   - Use a linha de base do próprio paciente (primeiros minutos) para comparar mudanças; não compare com padrão genérico.\n   - Considere e cite quando aplicável fatores não emocionais que alteram a voz: sotaque regional, jeito natural de falar, cansaço, gripe, medicação, condições como autismo, Parkinson ou depressão, ruído ambiente e qualidade da gravação.\n   - Se o áudio estiver ruim, ruidoso ou abafado, informe isso e reduza a confiança para \"baixa\".\n   - NÃO invente emoções em trechos curtos demais ou sem fala clara. Se não houver fala inteligível no áudio, retorne trechos: [].\n9. SINAIS PARA INVESTIGAR:\n   - Ligue os achados a áreas clínicas sem diagnosticar (ex.: humor, ansiedade, sono, energia, interesse e prazer, autoestima, concentração, irritabilidade, uso de substâncias, trauma, relações), com justificativa baseada em fala+voz e uma pergunta aberta sugerida para a próxima sessão.\n10. ALERTA DE RISCO:\n   - Se o paciente falar em morte, suicídio, se machucar, desesperança intensa ou falta de saída, OU se a voz e o conteúdo juntos indicarem desespero grave, marque alerta_de_risco.status = \"sim\" e explique o motivo com precisão. Caso contrário, status = \"não\" e motivo = \"\".\n11. Responda ESTRITAMENTE no formato JSON solicitado, em português do Brasil.",
+  "instrucaoResumo": "Você é um assistente de síntese clínica para psicólogas. Nunca diagnostique; escreva apenas hipóteses apoiadas em evidências vocais e verbais.",
+  "instrucaoTranscricao": "Transcreva fielmente este áudio em português do Brasil, preservando pausas longas (...), hesitações e repetições.",
+  "formatoBloco": {
+    "type": "OBJECT",
+    "properties": {
+      "qualidade_audio_percebida": {
+        "type": "STRING",
+        "enum": [
+          "boa",
+          "moderada",
+          "baixa"
+        ],
+        "description": "Qualidade geral do áudio percebida na escuta."
+      },
+      "observacao_audio": {
+        "type": "STRING",
+        "description": "Observação curta sobre clareza, ruído, eco ou distância do microfone."
+      },
+      "fatores_nao_emocionais_identificados": {
+        "type": "ARRAY",
+        "items": {
+          "type": "STRING"
+        },
+        "description": "Possíveis fatores não emocionais que alteram a voz (ex.: sotaque, cansaço, gripe, medicação, ruído, prosódia atípica)."
+      },
+      "trechos": {
+        "type": "ARRAY",
+        "items": {
+          "type": "OBJECT",
+          "properties": {
+            "inicio": {
+              "type": "STRING",
+              "description": "Tempo inicial no formato MM:SS relativo ao início deste bloco."
+            },
+            "fim": {
+              "type": "STRING",
+              "description": "Tempo final no formato MM:SS relativo ao início deste bloco."
+            },
+            "falante": {
+              "type": "STRING",
+              "enum": [
+                "Psicóloga",
+                "Paciente"
+              ],
+              "description": "Quem está falando no trecho."
+            },
+            "transcricao": {
+              "type": "STRING",
+              "description": "Transcrição fiel em português do Brasil, preservando hesitações e repetições."
+            },
+            "temas": {
+              "type": "ARRAY",
+              "items": {
+                "type": "STRING"
+              },
+              "description": "Temas principais abordados no trecho."
+            },
+            "emocoes": {
+              "type": "ARRAY",
+              "items": {
+                "type": "OBJECT",
+                "properties": {
+                  "emocao": {
+                    "type": "STRING",
+                    "description": "Uma das emoções: tristeza, ansiedade ou medo, raiva ou irritação, culpa ou vergonha, desesperança, apatia ou desânimo, alegria ou alívio, tensão, confusão, neutro."
+                  },
+                  "intensidade": {
+                    "type": "INTEGER",
+                    "description": "Intensidade de 0 a 3 (0 ausente, 1 leve, 2 moderada, 3 intensa)."
+                  },
+                  "confianca": {
+                    "type": "STRING",
+                    "enum": [
+                      "baixa",
+                      "média",
+                      "alta"
+                    ]
+                  },
+                  "evidencias_na_voz": {
+                    "type": "STRING",
+                    "description": "Evidências concretas percebidas na voz (tom, ritmo, pausas, tremor, respiração)."
+                  }
+                },
+                "required": [
+                  "emocao",
+                  "intensidade",
+                  "confianca",
+                  "evidencias_na_voz"
+                ]
+              }
+            },
+            "marcadores_da_voz": {
+              "type": "OBJECT",
+              "properties": {
+                "tom": {
+                  "type": "STRING"
+                },
+                "intensidade": {
+                  "type": "STRING"
+                },
+                "velocidade": {
+                  "type": "STRING"
+                },
+                "pausas": {
+                  "type": "STRING"
+                },
+                "qualidade_da_voz": {
+                  "type": "STRING"
+                },
+                "sinais_nao_verbais": {
+                  "type": "ARRAY",
+                  "items": {
+                    "type": "STRING"
+                  }
+                }
+              },
+              "required": [
+                "tom",
+                "intensidade",
+                "velocidade",
+                "pausas",
+                "qualidade_da_voz",
+                "sinais_nao_verbais"
+              ]
+            },
+            "congruencia": {
+              "type": "OBJECT",
+              "properties": {
+                "status": {
+                  "type": "STRING",
+                  "enum": [
+                    "combina",
+                    "nao_combina"
+                  ]
+                },
+                "explicacao": {
+                  "type": "STRING",
+                  "description": "Explicação em linguagem de hipótese sobre a congruência ou incongruência entre fala e voz."
+                }
+              },
+              "required": [
+                "status",
+                "explicacao"
+              ]
+            },
+            "sinais_para_investigar": {
+              "type": "ARRAY",
+              "items": {
+                "type": "OBJECT",
+                "properties": {
+                  "area": {
+                    "type": "STRING"
+                  },
+                  "justificativa": {
+                    "type": "STRING"
+                  },
+                  "pergunta_sugerida": {
+                    "type": "STRING"
+                  }
+                },
+                "required": [
+                  "area",
+                  "justificativa",
+                  "pergunta_sugerida"
+                ]
+              }
+            },
+            "alerta_de_risco": {
+              "type": "OBJECT",
+              "properties": {
+                "status": {
+                  "type": "STRING",
+                  "enum": [
+                    "sim",
+                    "não"
+                  ]
+                },
+                "motivo": {
+                  "type": "STRING"
+                }
+              },
+              "required": [
+                "status",
+                "motivo"
+              ]
+            }
+          },
+          "required": [
+            "inicio",
+            "fim",
+            "falante",
+            "transcricao",
+            "temas",
+            "emocoes",
+            "marcadores_da_voz",
+            "congruencia",
+            "sinais_para_investigar",
+            "alerta_de_risco"
+          ]
+        }
+      }
+    },
+    "required": [
+      "qualidade_audio_percebida",
+      "observacao_audio",
+      "fatores_nao_emocionais_identificados",
+      "trechos"
+    ]
+  },
+  "formatoResumo": {
+    "type": "OBJECT",
+    "properties": {
+      "panorama_emocional": {
+        "type": "STRING",
+        "description": "Um parágrafo curto em linguagem de hipótese resumindo o panorama emocional da sessão."
+      },
+      "momentos_chave": {
+        "type": "ARRAY",
+        "items": {
+          "type": "OBJECT",
+          "properties": {
+            "tempo": {
+              "type": "STRING"
+            },
+            "descricao": {
+              "type": "STRING"
+            },
+            "evidencia_vocal": {
+              "type": "STRING"
+            }
+          },
+          "required": [
+            "tempo",
+            "descricao",
+            "evidencia_vocal"
+          ]
+        }
+      },
+      "comparacao_linha_de_base": {
+        "type": "STRING",
+        "description": "Comparação da voz ao longo da sessão em relação aos primeiros minutos do próprio paciente."
+      },
+      "fatores_confundidores": {
+        "type": "ARRAY",
+        "items": {
+          "type": "STRING"
+        }
+      },
+      "perguntas_prioritarias": {
+        "type": "ARRAY",
+        "items": {
+          "type": "OBJECT",
+          "properties": {
+            "area": {
+              "type": "STRING"
+            },
+            "pergunta": {
+              "type": "STRING"
+            }
+          },
+          "required": [
+            "area",
+            "pergunta"
+          ]
+        }
+      }
+    },
+    "required": [
+      "panorama_emocional",
+      "momentos_chave",
+      "comparacao_linha_de_base",
+      "fatores_confundidores",
+      "perguntas_prioritarias"
+    ]
+  },
+  "casos": {
+    "neutra": {
+      "parts": [
+        {
+          "text": "Como foi a sua semana desde a nossa última conversa?",
+          "speechMetadata": {
+            "speaker": "Psicóloga",
+            "style": "Calma, acolhedora, tom natural em português brasileiro"
+          }
+        },
+        {
+          "text": "Foi uma semana tranquila e bem organizada. Consegui entregar o relatório no trabalho na quarta-feira, dormi no meu horário habitual e fiz caminhada dois dias no parque. Senti que mantive uma rotina estável.",
+          "speechMetadata": {
+            "speaker": "Paciente",
+            "style": "Tom calmo, estável, ritmo regular, fala clara e neutra em português brasileiro"
+          }
+        }
+      ],
+      "plainPrompt": "Foi uma semana tranquila e bem organizada. Consegui entregar o relatório no trabalho na quarta-feira, dormi no meu horário habitual e fiz caminhada dois dias no parque. Senti que mantive uma rotina estável.",
+      "speakerConfigs": [
+        {
+          "speaker": "Psicóloga",
+          "voiceConfig": {
+            "prebuiltVoiceConfig": {
+              "voiceName": "Kore"
+            }
+          }
+        },
+        {
+          "speaker": "Paciente",
+          "voiceConfig": {
+            "prebuiltVoiceConfig": {
+              "voiceName": "Puck"
+            }
+          }
+        }
+      ]
+    },
+    "triste_pausas": {
+      "parts": [
+        {
+          "text": "O que tem pesado mais para você nesses últimos dias?",
+          "speechMetadata": {
+            "speaker": "Psicóloga",
+            "style": "Suave, empática, tom acolhedor em português brasileiro"
+          }
+        },
+        {
+          "text": "<breath> Eu... eu acordo já sem força para levantar. ... Tudo parece exigir um esforço enorme... e parece que nada do que eu faço faz muita diferença mais. <breath> Às vezes eu só fico olhando para a parede esperando o dia passar.",
+          "speechMetadata": {
+            "speaker": "Paciente",
+            "style": "Voz baixa, lenta, cansada, com pausas longas, tom melancólico e abatido em português brasileiro"
+          }
+        }
+      ],
+      "plainPrompt": "<breath> Eu... eu acordo já sem força para levantar. ... Tudo parece exigir um esforço enorme... e parece que nada do que eu faço faz muita diferença mais. <breath> Às vezes eu só fico olhando para a parede esperando o dia passar.",
+      "speakerConfigs": [
+        {
+          "speaker": "Psicóloga",
+          "voiceConfig": {
+            "prebuiltVoiceConfig": {
+              "voiceName": "Kore"
+            }
+          }
+        },
+        {
+          "speaker": "Paciente",
+          "voiceConfig": {
+            "prebuiltVoiceConfig": {
+              "voiceName": "Charon"
+            }
+          }
+        }
+      ]
+    },
+    "incongruencia_embargada": {
+      "parts": [
+        {
+          "text": "Quando você falou da reunião de família, percebi você respirando fundo. Como você está se sentindo agora?",
+          "speechMetadata": {
+            "speaker": "Psicóloga",
+            "style": "Gentil, atenta, ritmo calmo em português brasileiro"
+          }
+        },
+        {
+          "text": "<breath> Não, eu estou ótima, sério, está tudo bem comigo. ... Não precisa se preocupar não, eu já superei isso... está tudo resolvido, eu estou realmente bem.",
+          "speechMetadata": {
+            "speaker": "Paciente",
+            "style": "Voz embargada, trêmula, quase chorando, volume baixo e hesitante apesar de dizer que está bem, em português brasileiro"
+          }
+        }
+      ],
+      "plainPrompt": "<breath> Não... eu estou ótima, sério, está tudo bem comigo... Não precisa se preocupar não, eu já superei isso... está tudo resolvido, eu estou realmente bem.",
+      "speakerConfigs": [
+        {
+          "speaker": "Psicóloga",
+          "voiceConfig": {
+            "prebuiltVoiceConfig": {
+              "voiceName": "Kore"
+            }
+          }
+        },
+        {
+          "speaker": "Paciente",
+          "voiceConfig": {
+            "prebuiltVoiceConfig": {
+              "voiceName": "Zephyr"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
